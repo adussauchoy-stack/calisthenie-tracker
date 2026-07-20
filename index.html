@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#0f1115">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icons/icon-180.png">
+  <link rel="stylesheet" href="styles.css">
+  <title>Calisthénie</title>
+</head>
+<body>
+  <div id="app-root">
+    <header>
+      <button id="back" aria-label="Retour">‹</button>
+      <span id="crumb">Séance</span>
+      <button id="nav-progress" class="navbtn" aria-label="Progression">📈</button>
+      <button id="nav-settings" class="navbtn" aria-label="Réglages">⚙︎</button>
+    </header>
+    <div id="banner" hidden></div>
+    <h1 id="title">Choisis une catégorie</h1>
+    <div id="screen"></div>
+  </div>
+  <div id="timer" class="wait" hidden>
+    <span id="timerval">0:00</span>
+    <small id="timerlabel">Repos…</small>
+    <button class="stop" id="timerstop" aria-label="Arrêter le repos">✕</button>
+  </div>
+  <script type="module" src="src/app.js"></script>
+</body>
+</html>
