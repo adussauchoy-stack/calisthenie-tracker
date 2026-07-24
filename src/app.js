@@ -1,6 +1,6 @@
 // calisthenie/src/app.js
 import { TYPES, lastSerie, formatLast, formatSerie, computeRecords, chartPoints, svgPath } from './model.js';
-import { loadDB, saveDB, addSerie, CATEGORIES, childrenOf, addExo, updateExo, removeExo, changeCategorie,
+import { loadDB, saveDB, addSerie, removeSerie, CATEGORIES, childrenOf, addExo, updateExo, removeExo, changeCategorie,
          exportJSON, importJSON, besoinRappelExport } from './store.js';
 import { SEED_EXOS } from './seed.js';
 
@@ -15,6 +15,21 @@ const $ = (id) => document.getElementById(id);
 const el = (tag, cls) => { const e = document.createElement(tag); if (cls) e.className = cls; return e; };
 const exoById = (id) => db.exos.find((e) => e.id === id);
 const typeLabel = (t) => (t === TYPES.TEMPS ? '⏱ maintien' : t === TYPES.REPS_LEST ? '🏋 reps + lest' : '🔁 reps');
+
+// Suppression en deux taps (pas de confirm() natif : bloqué en PWA installée sur iPhone).
+// 1er tap : le bouton s'arme et demande confirmation ; 2e tap : suppression ; sans 2e tap il se désarme.
+function delButton(onConfirm, label = '🗑 Supprimer') {
+  const b = el('button', 'action ghost del');
+  b.textContent = label;
+  let armed = false, t = null;
+  b.onclick = () => {
+    if (!armed) {
+      armed = true; b.textContent = '⚠️ Confirmer ?';
+      t = setTimeout(() => { armed = false; b.textContent = label; }, 4000);
+    } else { clearTimeout(t); onConfirm(); }
+  };
+  return b;
+}
 
 function bigBtn(txt, tag, cls, onclick) {
   const b = el('button', 'btn ' + cls);
@@ -111,6 +126,11 @@ function renderSets(n) {
   tempSets.forEach((s, i) => {
     const line = el('div', 'set-line');
     line.innerHTML = `<span class="n">Série ${tempSets.length - i}</span><span>${formatSerie(s, n.type)}</span>`;
+    line.appendChild(delButton(() => {
+      removeSerie(db, s.id); saveDB(store, db);
+      tempSets = tempSets.filter((x) => x.id !== s.id);
+      renderSets(n);
+    }, '🗑'));
     box.appendChild(line);
   });
 }
@@ -204,9 +224,7 @@ function renderSettings() {
       repos.onchange = () => { updateExo(db, n.id, { tempsReposCible: parseInt(repos.value, 10) || 0 }); saveDB(store, db); };
       rowEl.appendChild(labelWrap('Repos cible (s)', repos));
     }
-    const del = el('button', 'action ghost'); del.textContent = '🗑 Supprimer';
-    del.onclick = () => { if (confirm(`Supprimer "${n.nom}" et ses données ?`)) { removeExo(db, n.id); saveDB(store, db); render(); } };
-    rowEl.appendChild(del);
+    rowEl.appendChild(delButton(() => { removeExo(db, n.id); saveDB(store, db); render(); }));
     screen.appendChild(rowEl);
   });
 
@@ -242,6 +260,14 @@ function renderProgress() {
     svg.innerHTML = (d ? `<path d="${d}"></path>` : '') + dots.map((p) => `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="3.5"></circle>`).join('');
     screen.appendChild(svg);
     if (pts.length === 0) { const p = el('div', 'last'); p.textContent = 'Aucune donnée encore.'; screen.appendChild(p); }
+    // Dernières séries, avec suppression (corrige une saisie ratée après coup)
+    [...series].sort((a, b) => b.date - a.date).slice(0, 10).forEach((s) => {
+      const dt = new Date(s.date);
+      const line = el('div', 'set-line serie-line');
+      line.innerHTML = `<span class="n">${String(dt.getDate()).padStart(2, '0')}/${String(dt.getMonth() + 1).padStart(2, '0')}</span><span>${formatSerie(s, n.type)}</span>`;
+      line.appendChild(delButton(() => { removeSerie(db, s.id); saveDB(store, db); render(); }, '🗑'));
+      screen.appendChild(line);
+    });
     return;
   }
   $('crumb').textContent = 'Progression'; $('title').textContent = 'Progression';

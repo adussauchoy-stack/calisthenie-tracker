@@ -32,6 +32,10 @@ export function addSerie(db, { exoId, reps = 0, lest = 0, temps = 0 }, gen = {})
   return serie;
 }
 
+export function removeSerie(db, id) {
+  db.series = db.series.filter((s) => s.id !== id);
+}
+
 export const CATEGORIES = ['Push', 'Pull', 'Legs', 'Core'];
 
 export function childrenOf(db, categorieId, parentId = null) {
