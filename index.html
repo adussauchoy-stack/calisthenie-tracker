@@ -5,7 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="theme-color" content="#0f1115">
+  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#131210">
+  <meta name="theme-color" media="(prefers-color-scheme: light)" content="#eae4d6">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="apple-touch-icon" href="icons/icon-180.png">
   <link rel="stylesheet" href="styles.css">
@@ -16,8 +17,8 @@
     <header>
       <button id="back" aria-label="Retour">‹</button>
       <span id="crumb">Séance</span>
-      <button id="nav-progress" class="navbtn" aria-label="Progression">📈</button>
-      <button id="nav-settings" class="navbtn" aria-label="Réglages">⚙︎</button>
+      <button id="nav-progress" class="navbtn" aria-label="Progression"><svg viewBox="0 0 20 20" aria-hidden="true"><polyline points="2.5,15.5 8,9.5 12,12.5 17.5,4.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      <button id="nav-settings" class="navbtn" aria-label="Réglages"><svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><line x1="3" y1="6" x2="17" y2="6"/><line x1="3" y1="14" x2="17" y2="14"/><circle cx="12.5" cy="6" r="2.2" fill="var(--card, none)"/><circle cx="7.5" cy="14" r="2.2" fill="var(--card, none)"/></svg></button>
     </header>
     <div id="banner" hidden></div>
     <h1 id="title">Choisis une catégorie</h1>

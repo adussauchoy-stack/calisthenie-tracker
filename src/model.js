@@ -13,7 +13,7 @@ export function formatSerie(serie, type) {
 }
 
 export function formatLast(serie, type) {
-  if (!serie) return 'Première fois 💪';
+  if (!serie) return 'Première fois';
   return `Dernière fois : ${formatSerie(serie, type)}`;
 }
 
@@ -24,6 +24,17 @@ export function computeRecords(series, type) {
     lest: type === TYPES.REPS_LEST ? max((x) => x.lest) || null : null,
     temps: type === TYPES.TEMPS ? max((x) => x.temps) || null : null,
   };
+}
+
+// Vrai si la série bat une meilleure marque antérieure de l'exo (une marque doit exister :
+// la toute première série d'un exo n'est pas un record). Pour reps+lest, battre l'un OU l'autre suffit,
+// en miroir des deux records affichés.
+export function estRecord(seriesAvant, serie, type) {
+  if (seriesAvant.length === 0) return false;
+  const rec = computeRecords(seriesAvant, type);
+  if (type === TYPES.TEMPS) return serie.temps > (rec.temps || 0);
+  if (type === TYPES.REPS_LEST) return serie.reps > (rec.reps || 0) || serie.lest > (rec.lest || 0);
+  return serie.reps > (rec.reps || 0);
 }
 
 export function dayKey(dateMs) {

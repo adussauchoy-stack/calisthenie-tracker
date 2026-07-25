@@ -1,5 +1,5 @@
 // calisthenie/src/app.js
-import { TYPES, lastSerie, formatLast, formatSerie, computeRecords, chartPoints, svgPath, seriesDuJour } from './model.js';
+import { TYPES, lastSerie, formatLast, formatSerie, computeRecords, chartPoints, svgPath, seriesDuJour, estRecord } from './model.js';
 import { loadDB, saveDB, addSerie, removeSerie, CATEGORIES, childrenOf, addExo, updateExo, removeExo, changeCategorie,
          exportJSON, importJSON, besoinRappelExport } from './store.js';
 import { SEED_EXOS } from './seed.js';
@@ -14,18 +14,18 @@ let messageImport = null;
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls) => { const e = document.createElement(tag); if (cls) e.className = cls; return e; };
 const exoById = (id) => db.exos.find((e) => e.id === id);
-const typeLabel = (t) => (t === TYPES.TEMPS ? '⏱ maintien' : t === TYPES.REPS_LEST ? '🏋 reps + lest' : '🔁 reps');
+const typeLabel = (t) => (t === TYPES.TEMPS ? 'maintien' : t === TYPES.REPS_LEST ? 'reps + lest' : 'reps');
 
 // Suppression en deux taps (pas de confirm() natif : bloqué en PWA installée sur iPhone).
 // 1er tap : le bouton s'arme et demande confirmation ; 2e tap : suppression ; sans 2e tap il se désarme.
-function delButton(onConfirm, label = '🗑 Supprimer', armedLabel) {
+function delButton(onConfirm, label = 'Supprimer', armedLabel) {
   const b = el('button', 'action ghost del');
   b.textContent = label;
   let armed = false, t = null;
   b.onclick = () => {
     if (!armed) {
       armed = true;
-      b.textContent = (typeof armedLabel === 'function' ? armedLabel() : armedLabel) || '⚠️ Confirmer ?';
+      b.textContent = (typeof armedLabel === 'function' ? armedLabel() : armedLabel) || 'Confirmer ?';
       t = setTimeout(() => { armed = false; b.textContent = label; }, 4000);
     } else { clearTimeout(t); onConfirm(); }
   };
@@ -46,10 +46,13 @@ function render() {
   screen.innerHTML = '';
   back.style.display = view.level === 'cat' ? 'none' : 'flex';
   $('banner').hidden = !besoinRappelExport(db);
-  $('banner').textContent = '🔔 Pense à exporter ta sauvegarde (Réglages).';
+  $('banner').textContent = 'Pense à exporter ta sauvegarde (Réglages).';
 
   if (view.level === 'cat') {
-    crumb.textContent = 'Séance'; title.textContent = 'Choisis une catégorie';
+    // La fiche du jour est datée, comme toute fiche de préparation.
+    const d = new Date();
+    crumb.textContent = `Séance — ${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`;
+    title.textContent = 'Choisis une catégorie';
     const grid = el('div', 'grid');
     CATEGORIES.forEach((c) => grid.appendChild(bigBtn(c, 'Catégorie', 'cat', () => { view = { level: 'node', catId: c }; render(); })));
     screen.appendChild(grid); return;
@@ -126,26 +129,32 @@ function valeurPrincipale(n) {
 function onAddSet(n) {
   if (!(valeurPrincipale(n) > 0)) return;
   const g = (id) => { const e = $('f_' + id); return e ? (parseInt(e.value, 10) || 0) : 0; };
-  addSerie(db, { exoId: n.id, reps: g('reps'), lest: g('lest'), temps: g('temps') });
+  const serie = addSerie(db, { exoId: n.id, reps: g('reps'), lest: g('lest'), temps: g('temps') });
   saveDB(store, db);
-  renderSets(n);
+  renderSets(n, serie.id);
   startTimer(n.tempsReposCible);
   if (navigator.vibrate) navigator.vibrate(20);
   $('banner').hidden = !besoinRappelExport(db);
 }
 
-function renderSets(n) {
+function renderSets(n, neuveId = null) {
   const box = $('sets'); if (!box) return; box.innerHTML = '';
   // Relu depuis la base à chaque rendu : si iOS recharge la PWA mi-séance,
   // les séries du jour réapparaissent au lieu d'une liste vide trompeuse.
   const sets = seriesDuJour(db.series, n.id, Date.now());
+  const toutes = db.series.filter((s) => s.exoId === n.id);
   sets.forEach((s, i) => {
-    const line = el('div', 'set-line');
+    const line = el('div', 'set-line' + (s.id === neuveId ? ' neuve' : ''));
     line.innerHTML = `<span class="n">Série ${sets.length - i}</span><span>${formatSerie(s, n.type)}</span>`;
+    // Le tampon PR : recalculé contre l'historique antérieur à la série, il survit aux re-rendus.
+    if (estRecord(toutes.filter((x) => x.date < s.date), s, n.type)) {
+      const pr = el('span', 'pr-stamp'); pr.textContent = 'PR'; pr.setAttribute('aria-label', 'Record battu');
+      line.appendChild(pr);
+    }
     line.appendChild(delButton(() => {
       removeSerie(db, s.id); saveDB(store, db);
       renderSets(n);
-    }, '🗑'));
+    }, '✕'));
     box.appendChild(line);
   });
 }
@@ -160,9 +169,11 @@ function startTimer(cible) {
   const tick = () => {
     const ecoule = Math.floor((Date.now() - start) / 1000);
     const restant = cible - ecoule;
-    if (restant > 0) { box.className = 'wait'; val.textContent = fmt(restant); lbl.textContent = `Repos… cible ${cible}s`; }
+    // La règle graduée se remplit vers la cible (scaleX : composité, pas de layout).
+    box.style.setProperty('--avancee', String(Math.min(1, ecoule / cible)));
+    if (restant > 0) { box.className = 'wait'; val.textContent = fmt(restant); lbl.innerHTML = `Repos… cible <span class="mono">${cible}s</span>`; }
     else {
-      box.className = 'ok'; val.textContent = `+${fmt(-restant)}`; lbl.textContent = `Repos atteint ✓ (cible ${cible}s)`;
+      box.className = 'ok'; val.textContent = `+${fmt(-restant)}`; lbl.innerHTML = `Repos atteint ✓ (cible <span class="mono">${cible}s</span>)`;
       if (!buzzed) { buzzed = true; if (navigator.vibrate) navigator.vibrate([60, 40, 60]); }
     }
   };
@@ -254,10 +265,10 @@ function renderSettings() {
   db.exos.forEach((n) => {
     const rowEl = el('div', 'exo-row set-line' + (n.estFamille ? ' fam' : '')); rowEl.dataset.id = n.id; rowEl.style.flexDirection = 'column'; rowEl.style.gap = '8px'; rowEl.style.alignItems = 'stretch';
     const head = el('div', 'exo-head');
-    const badge = el('span', 'badge ' + (n.estFamille ? 'fam' : 'exo')); badge.textContent = n.estFamille ? '📁 Famille' : 'Exercice';
+    const badge = el('span', 'badge ' + (n.estFamille ? 'fam' : 'exo')); badge.textContent = n.estFamille ? 'Famille' : 'Exercice';
     const titleEl = el('div', 'exo-title'); titleEl.textContent = n.nom;
     head.appendChild(badge); head.appendChild(titleEl); rowEl.appendChild(head);
-    const nameIn = el('input'); nameIn.className = 'nom'; nameIn.value = n.nom; nameIn.style.cssText = 'background:var(--card2);border:1px solid var(--line);color:var(--text);border-radius:12px;padding:8px;';
+    const nameIn = el('input'); nameIn.className = 'nom'; nameIn.value = n.nom; nameIn.style.cssText = 'background:var(--card2);border:1px solid var(--line);color:var(--text);border-radius:4px;padding:8px;';
     nameIn.onchange = () => { updateExo(db, n.id, { nom: nameIn.value }); saveDB(store, db); titleEl.textContent = nameIn.value; };
     rowEl.appendChild(labelWrap('Nom', nameIn));
 
@@ -282,16 +293,16 @@ function renderSettings() {
     // le libellé de confirmation chiffre ce qui va disparaître (calculé au moment de l'armement).
     rowEl.appendChild(delButton(
       () => { removeExo(db, n.id); saveDB(store, db); render(); },
-      '🗑 Supprimer',
+      'Supprimer',
       () => {
         const ids = new Set([n.id, ...db.exos.filter((e) => e.parentId === n.id).map((e) => e.id)]);
         const nbSeries = db.series.filter((s) => ids.has(s.exoId)).length;
         const nbDecl = ids.size - 1;
-        if (!nbSeries && !nbDecl) return '⚠️ Confirmer ?';
+        if (!nbSeries && !nbDecl) return 'Confirmer ?';
         const morceaux = [];
         if (nbDecl) morceaux.push(`${nbDecl} déclinaison${nbDecl > 1 ? 's' : ''}`);
         if (nbSeries) morceaux.push(`${nbSeries} série${nbSeries > 1 ? 's' : ''}`);
-        return `⚠️ Effacer aussi ${morceaux.join(' et ')} ?`;
+        return `Effacer aussi ${morceaux.join(' et ')} ?`;
       }
     ));
     screen.appendChild(rowEl);
@@ -299,12 +310,12 @@ function renderSettings() {
 
   function labelWrap(text, control) { const w = el('div', 'field'); const l = el('label'); l.textContent = text; w.appendChild(l); w.appendChild(control); return w; }
   function selectFrom(options, current) {
-    const s = el('select'); s.style.cssText = 'background:var(--card2);border:1px solid var(--line);color:var(--text);border-radius:12px;padding:8px;';
+    const s = el('select'); s.style.cssText = 'background:var(--card2);border:1px solid var(--line);color:var(--text);border-radius:4px;padding:8px;';
     options.forEach((o) => { const opt = el('option'); opt.value = o; opt.textContent = o; if (o === current) opt.selected = true; s.appendChild(opt); });
     return s;
   }
   function selectFromPairs(pairs, current) {
-    const s = el('select'); s.style.cssText = 'background:var(--card2);border:1px solid var(--line);color:var(--text);border-radius:12px;padding:8px;';
+    const s = el('select'); s.style.cssText = 'background:var(--card2);border:1px solid var(--line);color:var(--text);border-radius:4px;padding:8px;';
     pairs.forEach((p) => { const opt = el('option'); opt.value = p.value; opt.textContent = p.label; if (p.value === current) opt.selected = true; s.appendChild(opt); });
     return s;
   }
@@ -326,7 +337,15 @@ function renderProgress() {
     const W = 528, H = 180; const { d, dots } = svgPath(pts, W, H);
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     svg.setAttribute('class', 'chart'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
-    svg.innerHTML = (d ? `<path d="${d}"></path>` : '') + dots.map((p) => `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="3.5"></circle>`).join('');
+    // Les chiffres de marge du papier millimétré : min et max en voix machine.
+    const unite = n.type === TYPES.TEMPS ? 's' : '';
+    const marges = pts.length ? (() => {
+      const vals = pts.map((p) => p.value);
+      const maxV = Math.max(...vals), minV = Math.min(...vals);
+      const t = (v, y) => `<text x="6" y="${y}" fill="var(--muted)" font-family="ui-monospace,Menlo,monospace" font-size="11">${v}${unite}</text>`;
+      return t(maxV, 14) + (maxV !== minV ? t(minV, H - 6) : '');
+    })() : '';
+    svg.innerHTML = marges + (d ? `<path d="${d}"></path>` : '') + dots.map((p) => `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="3.5"></circle>`).join('');
     screen.appendChild(svg);
     if (pts.length === 0) { const p = el('div', 'last'); p.textContent = 'Aucune donnée encore.'; screen.appendChild(p); }
     // Dernières séries, avec suppression (corrige une saisie ratée après coup)
@@ -334,7 +353,7 @@ function renderProgress() {
       const dt = new Date(s.date);
       const line = el('div', 'set-line serie-line');
       line.innerHTML = `<span class="n">${String(dt.getDate()).padStart(2, '0')}/${String(dt.getMonth() + 1).padStart(2, '0')}</span><span>${formatSerie(s, n.type)}</span>`;
-      line.appendChild(delButton(() => { removeSerie(db, s.id); saveDB(store, db); render(); }, '🗑'));
+      line.appendChild(delButton(() => { removeSerie(db, s.id); saveDB(store, db); render(); }, '✕'));
       screen.appendChild(line);
     });
     return;
