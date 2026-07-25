@@ -32,6 +32,14 @@ export function dayKey(dateMs) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
+// Séries déjà loguées aujourd'hui pour un exo (la plus récente d'abord).
+// Sert à restaurer la liste de la session si iOS recharge la PWA mi-séance.
+export function seriesDuJour(series, exoId, nowMs) {
+  return series
+    .filter((s) => s.exoId === exoId && dayKey(s.date) === dayKey(nowMs))
+    .sort((a, b) => b.date - a.date);
+}
+
 export function chartPoints(series, type) {
   const metric = (x) => (type === TYPES.TEMPS ? x.temps : x.reps);
   const byDay = new Map();

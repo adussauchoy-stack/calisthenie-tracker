@@ -1,5 +1,5 @@
 // calisthenie/service-worker.js
-const CACHE = 'cali-v6';
+const CACHE = 'cali-v7';
 const ASSETS = [
   './', './index.html', './styles.css',
   './src/app.js', './src/model.js', './src/store.js', './src/seed.js',
