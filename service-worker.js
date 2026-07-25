@@ -1,8 +1,9 @@
 // calisthenie/service-worker.js
-const CACHE = 'cali-v8';
+const CACHE = 'cali-v9';
 const ASSETS = [
   './', './index.html', './styles.css',
   './src/app.js', './src/model.js', './src/store.js', './src/seed.js',
+  './fonts/courier-prime-400.woff2', './fonts/courier-prime-700.woff2',
   './manifest.webmanifest', './icons/icon-180.png', './icons/icon-192.png', './icons/icon-512.png',
 ];
 self.addEventListener('install', (e) => {

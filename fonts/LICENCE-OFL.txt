@@ -1,0 +1,8 @@
+Courier Prime (courier-prime-400.woff2, courier-prime-700.woff2)
+Copyright 2015 The Courier Prime Project Authors (https://github.com/quoteunquote/courier-prime)
+
+Distribuée sous licence SIL Open Font License 1.1 (OFL) :
+https://openfontlicense.org/open-font-license-official-text/
+
+Ces fichiers sont des sous-ensembles latins servis par Google Fonts, embarqués
+localement pour respecter la contrainte hors-ligne de l'app (aucun CDN à l'exécution).

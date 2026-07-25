@@ -10,6 +10,7 @@ if (db.exos.length === 0) { db.exos = [...SEED_EXOS]; saveDB(store, db); }
 
 let view = { level: 'cat' };
 let messageImport = null;
+let reglageOuvert = null; // fiche dépliée dans les Réglages (accordéon : une seule à la fois)
 
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls) => { const e = document.createElement(tag); if (cls) e.className = cls; return e; };
@@ -246,7 +247,7 @@ function renderSettings() {
 
   // Ajout : exercice ou famille — le nouvel élément est amené à l'écran, prêt à renommer
   function ajouter(exo) {
-    const cree = addExo(db, exo); saveDB(store, db); render();
+    const cree = addExo(db, exo); reglageOuvert = cree.id; saveDB(store, db); render();
     const row = document.querySelector(`.exo-row[data-id="${cree.id}"]`);
     if (row) {
       row.scrollIntoView({ block: 'center' });
@@ -261,37 +262,54 @@ function renderSettings() {
   addFamBtn.onclick = () => ajouter({ nom: 'Nouvelle famille', categorieId: CATEGORIES[0], parentId: null, estFamille: true });
   addRow.appendChild(addExoBtn); addRow.appendChild(addFamBtn); screen.appendChild(addRow);
 
-  // Liste éditable
-  db.exos.forEach((n) => {
-    const rowEl = el('div', 'exo-row set-line' + (n.estFamille ? ' fam' : '')); rowEl.dataset.id = n.id; rowEl.style.flexDirection = 'column'; rowEl.style.gap = '8px'; rowEl.style.alignItems = 'stretch';
-    const head = el('div', 'exo-head');
-    const badge = el('span', 'badge ' + (n.estFamille ? 'fam' : 'exo')); badge.textContent = n.estFamille ? 'Famille' : 'Exercice';
-    const titleEl = el('div', 'exo-title'); titleEl.textContent = n.nom;
-    head.appendChild(badge); head.appendChild(titleEl); rowEl.appendChild(head);
+  // Le classeur : fiches groupées par catégorie, repliées — une seule dépliée à la fois.
+  const resume = (n) => {
+    if (n.estFamille) { const nb = db.exos.filter((e) => e.parentId === n.id).length; return `${nb} décl.`; }
+    return `${typeLabel(n.type)} · ${n.tempsReposCible}s`;
+  };
+
+  function fiche(n, estDecl) {
+    const ouverte = reglageOuvert === n.id;
+    const rowEl = el('div', 'exo-row' + (n.estFamille ? ' fam' : '') + (estDecl ? ' decl' : '') + (ouverte ? ' ouvert' : ''));
+    rowEl.dataset.id = n.id;
+
+    const tog = el('button', 'exo-toggle');
+    tog.setAttribute('aria-expanded', String(ouverte));
+    tog.setAttribute('aria-label', n.nom);
+    if (n.estFamille) { const badge = el('span', 'badge fam'); badge.textContent = 'Famille'; tog.appendChild(badge); }
+    const titleEl = el('span', 'exo-title'); titleEl.textContent = n.nom; tog.appendChild(titleEl);
+    const m = el('span', 'exo-resume'); m.textContent = resume(n); tog.appendChild(m);
+    const chev = el('span', 'chev'); chev.textContent = '›'; chev.setAttribute('aria-hidden', 'true'); tog.appendChild(chev);
+    tog.onclick = () => { reglageOuvert = ouverte ? null : n.id; render(); };
+    rowEl.appendChild(tog);
+
+    if (!ouverte) return rowEl;
+
+    const edit = el('div', 'exo-edit');
     const nameIn = el('input'); nameIn.className = 'nom'; nameIn.value = n.nom; nameIn.style.cssText = 'background:var(--card2);border:1px solid var(--line);color:var(--text);border-radius:4px;padding:8px;';
     nameIn.onchange = () => { updateExo(db, n.id, { nom: nameIn.value }); saveDB(store, db); titleEl.textContent = nameIn.value; };
-    rowEl.appendChild(labelWrap('Nom', nameIn));
+    edit.appendChild(labelWrap('Nom', nameIn));
 
     const catSel = selectFrom(CATEGORIES, n.categorieId);
     catSel.onchange = () => { changeCategorie(db, n.id, catSel.value); saveDB(store, db); render(); };
-    rowEl.appendChild(labelWrap('Catégorie', catSel));
+    edit.appendChild(labelWrap('Catégorie', catSel));
 
     if (!n.estFamille) {
       const familles = db.exos.filter((e) => e.estFamille && e.categorieId === n.categorieId);
       const parentSel = selectFromPairs([{ value: '', label: '— (niveau 1)' }, ...familles.map((f) => ({ value: f.id, label: f.nom }))], n.parentId || '');
       parentSel.className = 'parent';
       parentSel.onchange = () => { updateExo(db, n.id, { parentId: parentSel.value || null }); saveDB(store, db); render(); };
-      rowEl.appendChild(labelWrap('Famille parente', parentSel));
+      edit.appendChild(labelWrap('Famille parente', parentSel));
 
-      const typeSel = selectFrom([TYPES.REPS, TYPES.REPS_LEST, TYPES.TEMPS], n.type); typeSel.onchange = () => { updateExo(db, n.id, { type: typeSel.value }); saveDB(store, db); };
-      rowEl.appendChild(labelWrap('Type', typeSel));
+      const typeSel = selectFrom([TYPES.REPS, TYPES.REPS_LEST, TYPES.TEMPS], n.type); typeSel.onchange = () => { updateExo(db, n.id, { type: typeSel.value }); saveDB(store, db); render(); };
+      edit.appendChild(labelWrap('Type', typeSel));
       const repos = el('input'); repos.className = 'repos'; repos.type = 'number'; repos.value = n.tempsReposCible; repos.style.cssText = nameIn.style.cssText;
       repos.onchange = () => { updateExo(db, n.id, { tempsReposCible: parseInt(repos.value, 10) || 0 }); saveDB(store, db); };
-      rowEl.appendChild(labelWrap('Repos cible (s)', repos));
+      edit.appendChild(labelWrap('Repos cible (s)', repos));
     }
     // Supprimer une famille emporte ses déclinaisons ET tout leur historique :
     // le libellé de confirmation chiffre ce qui va disparaître (calculé au moment de l'armement).
-    rowEl.appendChild(delButton(
+    edit.appendChild(delButton(
       () => { removeExo(db, n.id); saveDB(store, db); render(); },
       'Supprimer',
       () => {
@@ -305,7 +323,18 @@ function renderSettings() {
         return `Effacer aussi ${morceaux.join(' et ')} ?`;
       }
     ));
-    screen.appendChild(rowEl);
+    rowEl.appendChild(edit);
+    return rowEl;
+  }
+
+  CATEGORIES.forEach((cat) => {
+    const racines = childrenOf(db, cat);
+    if (racines.length === 0) return;
+    const h = el('div', 'reg-section'); h.textContent = cat; screen.appendChild(h);
+    racines.forEach((n) => {
+      screen.appendChild(fiche(n, false));
+      if (n.estFamille) childrenOf(db, cat, n.id).forEach((d) => screen.appendChild(fiche(d, true)));
+    });
   });
 
   function labelWrap(text, control) { const w = el('div', 'field'); const l = el('label'); l.textContent = text; w.appendChild(l); w.appendChild(control); return w; }
