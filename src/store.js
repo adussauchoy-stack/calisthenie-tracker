@@ -92,3 +92,24 @@ export function importJSON(text) {
 export function besoinRappelExport(db, seuil = 10) {
   return (db.meta.seriesDepuisExport || 0) >= seuil;
 }
+
+// Persistance du chrono de repos : iOS peut recharger la PWA mi-repos (changement d'app),
+// le repos doit survivre comme les séries. Au-delà de la cible + grace, le repos est périmé.
+export const TIMER_KEY = 'cali_timer_v1';
+
+export function saveTimer(store, { start, cible }) {
+  store.setItem(TIMER_KEY, JSON.stringify({ start, cible }));
+}
+
+export function loadTimer(store, nowMs = Date.now(), graceS = 600) {
+  try {
+    const t = JSON.parse(store.getItem(TIMER_KEY));
+    if (!t || typeof t.start !== 'number' || typeof t.cible !== 'number') return null;
+    if ((nowMs - t.start) / 1000 > t.cible + graceS) return null;
+    return t;
+  } catch { return null; }
+}
+
+export function clearTimer(store) {
+  store.removeItem(TIMER_KEY);
+}

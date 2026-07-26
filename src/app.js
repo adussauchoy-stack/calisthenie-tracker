@@ -1,7 +1,7 @@
 // calisthenie/src/app.js
-import { TYPES, lastSerie, formatLast, formatSerie, computeRecords, chartPoints, svgPath, seriesDuJour, estRecord } from './model.js';
+import { TYPES, lastSerie, formatSerie, computeRecords, chartPoints, svgPath, seriesDuJour, estRecord, dayKey } from './model.js';
 import { loadDB, saveDB, addSerie, removeSerie, CATEGORIES, childrenOf, addExo, updateExo, removeExo, changeCategorie,
-         exportJSON, importJSON, besoinRappelExport } from './store.js';
+         exportJSON, importJSON, besoinRappelExport, saveTimer, loadTimer, clearTimer } from './store.js';
 import { SEED_EXOS } from './seed.js';
 
 const store = window.localStorage;
@@ -19,15 +19,21 @@ const typeLabel = (t) => (t === TYPES.TEMPS ? 'maintien' : t === TYPES.REPS_LEST
 
 // Suppression en deux taps (pas de confirm() natif : bloqué en PWA installée sur iPhone).
 // 1er tap : le bouton s'arme et demande confirmation ; 2e tap : suppression ; sans 2e tap il se désarme.
-function delButton(onConfirm, label = 'Supprimer', armedLabel) {
+function delButton(onConfirm, label = 'Supprimer', armedLabel, ariaLabel) {
   const b = el('button', 'action ghost del');
   b.textContent = label;
+  if (ariaLabel) b.setAttribute('aria-label', ariaLabel);
   let armed = false, t = null;
   b.onclick = () => {
     if (!armed) {
       armed = true;
-      b.textContent = (typeof armedLabel === 'function' ? armedLabel() : armedLabel) || 'Confirmer ?';
-      t = setTimeout(() => { armed = false; b.textContent = label; }, 4000);
+      const arme = (typeof armedLabel === 'function' ? armedLabel() : armedLabel) || 'Confirmer ?';
+      b.textContent = arme;
+      if (ariaLabel) b.setAttribute('aria-label', arme);
+      t = setTimeout(() => {
+        armed = false; b.textContent = label;
+        if (ariaLabel) b.setAttribute('aria-label', ariaLabel);
+      }, 4000);
     } else { clearTimeout(t); onConfirm(); }
   };
   return b;
@@ -52,11 +58,25 @@ function render() {
   if (view.level === 'cat') {
     // La fiche du jour est datée, comme toute fiche de préparation.
     const d = new Date();
-    crumb.textContent = `Séance — ${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`;
+    const dateJour = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`;
+    crumb.textContent = `Séance — ${dateJour}`;
     title.textContent = 'Choisis une catégorie';
     const grid = el('div', 'grid');
     CATEGORIES.forEach((c) => grid.appendChild(bigBtn(c, 'Catégorie', 'cat', () => { view = { level: 'node', catId: c }; render(); })));
-    screen.appendChild(grid); return;
+    screen.appendChild(grid);
+    // Le bilan tamponné du jour : la fiche se signe au fil de la séance.
+    const jour = db.series.filter((s) => dayKey(s.date) === dayKey(Date.now()));
+    if (jour.length) {
+      const nbPR = jour.filter((s) => {
+        const exo = exoById(s.exoId);
+        return exo && estRecord(db.series.filter((x) => x.exoId === s.exoId && x.date < s.date), s, exo.type);
+      }).length;
+      const bilan = el('div', 'set-line bilan');
+      bilan.innerHTML = `<span class="n">Séance du ${dateJour}</span><span>${jour.length} série${jour.length > 1 ? 's' : ''}${nbPR ? ` · ${nbPR} PR` : ''}</span>`;
+      if (nbPR) { const pr = el('span', 'pr-stamp'); pr.textContent = 'PR'; pr.setAttribute('aria-label', 'Record battu aujourd\'hui'); bilan.appendChild(pr); }
+      screen.appendChild(bilan);
+    }
+    return;
   }
   if (view.level === 'node') {
     crumb.textContent = view.catId; title.textContent = view.catId;
@@ -98,11 +118,19 @@ function numField(id, label, ph) {
   return f;
 }
 
+function majLast(n) {
+  const box = document.querySelector('.last'); if (!box) return;
+  const derniere = lastSerie(db.series, n.id);
+  box.innerHTML = derniere ? `Dernière fois : <b>${formatSerie(derniere, n.type)}</b>` : 'Première fois';
+}
+
 function renderEntry() {
   const n = exoById(view.exoId);
-  $('crumb').textContent = 'Saisie'; $('title').textContent = n.nom;
+  // Le fil d'Ariane garde le chemin réel (Push › Planche), pas un « Saisie » générique.
+  $('crumb').textContent = n.parentId ? `${n.categorieId} › ${exoById(n.parentId).nom}` : n.categorieId;
+  $('title').textContent = n.nom;
   const screen = $('screen');
-  const last = el('div', 'last'); last.innerHTML = formatLast(lastSerie(db.series, n.id), n.type); screen.appendChild(last);
+  const last = el('div', 'last'); screen.appendChild(last); majLast(n);
   const fields = el('div', 'fields');
   if (n.type === TYPES.TEMPS) fields.appendChild(numField('temps', 'Temps (s)', '20'));
   else { fields.appendChild(numField('reps', 'Répétitions', '8')); if (n.type === TYPES.REPS_LEST) fields.appendChild(numField('lest', 'Lest (kg)', '0')); }
@@ -133,6 +161,7 @@ function onAddSet(n) {
   const serie = addSerie(db, { exoId: n.id, reps: g('reps'), lest: g('lest'), temps: g('temps') });
   saveDB(store, db);
   renderSets(n, serie.id);
+  majLast(n);
   startTimer(n.tempsReposCible);
   if (navigator.vibrate) navigator.vibrate(20);
   $('banner').hidden = !besoinRappelExport(db);
@@ -155,32 +184,42 @@ function renderSets(n, neuveId = null) {
     line.appendChild(delButton(() => {
       removeSerie(db, s.id); saveDB(store, db);
       renderSets(n);
-    }, '✕'));
+    }, '✕', undefined, `Supprimer la série ${sets.length - i} (${formatSerie(s, n.type)})`));
     box.appendChild(line);
   });
 }
 
 let timerInt = null;
-function startTimer(cible) {
+function startTimer(cible, startMs = Date.now()) {
   const box = $('timer'), val = $('timerval'), lbl = $('timerlabel');
-  const start = Date.now(); box.hidden = false; clearInterval(timerInt); let buzzed = false;
+  box.hidden = false; clearInterval(timerInt); let buzzed = false;
+  saveTimer(store, { start: startMs, cible }); // le repos survit à un rechargement de la PWA
   const fmt = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
   // Compte à rebours : la seule question mi-séance est « combien il me reste ? ».
   // Une fois la cible atteinte, le dépassement s'affiche en « +m:ss ».
   const tick = () => {
-    const ecoule = Math.floor((Date.now() - start) / 1000);
+    const ecoule = Math.floor((Date.now() - startMs) / 1000);
     const restant = cible - ecoule;
+    // Au-delà de 10 min de dépassement, le repos est périmé : la règle s'éteint seule.
+    if (restant < -600) return stopTimer();
     // La règle graduée se remplit vers la cible (scaleX : composité, pas de layout).
     box.style.setProperty('--avancee', String(Math.min(1, ecoule / cible)));
     if (restant > 0) { box.className = 'wait'; val.textContent = fmt(restant); lbl.innerHTML = `Repos… cible <span class="mono">${cible}s</span>`; }
     else {
       box.className = 'ok'; val.textContent = `+${fmt(-restant)}`; lbl.innerHTML = `Repos atteint ✓ (cible <span class="mono">${cible}s</span>)`;
-      if (!buzzed) { buzzed = true; if (navigator.vibrate) navigator.vibrate([60, 40, 60]); }
+      if (!buzzed) {
+        buzzed = true;
+        if (navigator.vibrate) navigator.vibrate([60, 40, 60]);
+        $('sr-annonce').textContent = 'Repos atteint';
+      }
     }
   };
   tick(); timerInt = setInterval(tick, 250);
 }
-function stopTimer() { clearInterval(timerInt); $('timer').hidden = true; }
+function stopTimer() {
+  clearInterval(timerInt); $('timer').hidden = true;
+  clearTimer(store); $('sr-annonce').textContent = '';
+}
 
 $('back').onclick = goBack;
 $('timerstop').onclick = stopTimer;
@@ -301,7 +340,10 @@ function renderSettings() {
       parentSel.onchange = () => { updateExo(db, n.id, { parentId: parentSel.value || null }); saveDB(store, db); render(); };
       edit.appendChild(labelWrap('Famille parente', parentSel));
 
-      const typeSel = selectFrom([TYPES.REPS, TYPES.REPS_LEST, TYPES.TEMPS], n.type); typeSel.onchange = () => { updateExo(db, n.id, { type: typeSel.value }); saveDB(store, db); render(); };
+      const typeSel = selectFromPairs(
+        [TYPES.REPS, TYPES.REPS_LEST, TYPES.TEMPS].map((t) => ({ value: t, label: typeLabel(t) })), n.type
+      );
+      typeSel.onchange = () => { updateExo(db, n.id, { type: typeSel.value }); saveDB(store, db); render(); };
       edit.appendChild(labelWrap('Type', typeSel));
       const repos = el('input'); repos.className = 'repos'; repos.type = 'number'; repos.value = n.tempsReposCible; repos.style.cssText = nameIn.style.cssText;
       repos.onchange = () => { updateExo(db, n.id, { tempsReposCible: parseInt(repos.value, 10) || 0 }); saveDB(store, db); };
@@ -321,7 +363,8 @@ function renderSettings() {
         if (nbDecl) morceaux.push(`${nbDecl} déclinaison${nbDecl > 1 ? 's' : ''}`);
         if (nbSeries) morceaux.push(`${nbSeries} série${nbSeries > 1 ? 's' : ''}`);
         return `Effacer aussi ${morceaux.join(' et ')} ?`;
-      }
+      },
+      `Supprimer ${n.nom}`
     ));
     rowEl.appendChild(edit);
     return rowEl;
@@ -330,7 +373,7 @@ function renderSettings() {
   CATEGORIES.forEach((cat) => {
     const racines = childrenOf(db, cat);
     if (racines.length === 0) return;
-    const h = el('div', 'reg-section'); h.textContent = cat; screen.appendChild(h);
+    const h = el('h2', 'reg-section'); h.textContent = cat; screen.appendChild(h);
     racines.forEach((n) => {
       screen.appendChild(fiche(n, false));
       if (n.estFamille) childrenOf(db, cat, n.id).forEach((d) => screen.appendChild(fiche(d, true)));
@@ -358,7 +401,12 @@ function renderProgress() {
     const series = db.series.filter((s) => s.exoId === n.id);
     const rec = computeRecords(series, n.type);
     const records = el('div', 'records');
-    const card = (v, l) => { const c = el('div', 'record'); c.innerHTML = `<div class="v">${v}</div><div class="l">${l}</div>`; return c; };
+    // Le record est par définition le PR : il porte son tampon là où l'on vient le contempler.
+    const card = (v, l) => {
+      const c = el('div', 'record'); c.innerHTML = `<div class="v">${v}</div><div class="l">${l}</div>`;
+      if (v !== '—') { const pr = el('span', 'pr-stamp'); pr.textContent = 'PR'; pr.setAttribute('aria-hidden', 'true'); c.appendChild(pr); }
+      return c;
+    };
     if (n.type === TYPES.TEMPS) records.appendChild(card(rec.temps ? rec.temps + 's' : '—', 'Record maintien'));
     else { records.appendChild(card(rec.reps ?? '—', 'Max reps')); if (n.type === TYPES.REPS_LEST) records.appendChild(card(rec.lest ? rec.lest + 'kg' : '—', 'Max lest')); }
     screen.appendChild(records);
@@ -366,12 +414,13 @@ function renderProgress() {
     const W = 528, H = 180; const { d, dots } = svgPath(pts, W, H);
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     svg.setAttribute('class', 'chart'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    svg.setAttribute('role', 'img'); svg.setAttribute('aria-label', `Courbe de progression — ${n.nom}`);
     // Les chiffres de marge du papier millimétré : min et max en voix machine.
     const unite = n.type === TYPES.TEMPS ? 's' : '';
     const marges = pts.length ? (() => {
       const vals = pts.map((p) => p.value);
       const maxV = Math.max(...vals), minV = Math.min(...vals);
-      const t = (v, y) => `<text x="6" y="${y}" fill="var(--muted)" font-family="ui-monospace,Menlo,monospace" font-size="11">${v}${unite}</text>`;
+      const t = (v, y) => `<text x="6" y="${y}" fill="var(--muted)" font-family="Courier Prime,ui-monospace,Menlo,monospace" font-size="11">${v}${unite}</text>`;
       return t(maxV, 14) + (maxV !== minV ? t(minV, H - 6) : '');
     })() : '';
     svg.innerHTML = marges + (d ? `<path d="${d}"></path>` : '') + dots.map((p) => `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="3.5"></circle>`).join('');
@@ -380,17 +429,29 @@ function renderProgress() {
     // Dernières séries, avec suppression (corrige une saisie ratée après coup)
     [...series].sort((a, b) => b.date - a.date).slice(0, 10).forEach((s) => {
       const dt = new Date(s.date);
+      const quand = `${String(dt.getDate()).padStart(2, '0')}/${String(dt.getMonth() + 1).padStart(2, '0')}`;
       const line = el('div', 'set-line serie-line');
-      line.innerHTML = `<span class="n">${String(dt.getDate()).padStart(2, '0')}/${String(dt.getMonth() + 1).padStart(2, '0')}</span><span>${formatSerie(s, n.type)}</span>`;
-      line.appendChild(delButton(() => { removeSerie(db, s.id); saveDB(store, db); render(); }, '✕'));
+      line.innerHTML = `<span class="n">${quand}</span><span>${formatSerie(s, n.type)}</span>`;
+      line.appendChild(delButton(() => { removeSerie(db, s.id); saveDB(store, db); render(); }, '✕', undefined,
+        `Supprimer la série du ${quand} (${formatSerie(s, n.type)})`));
       screen.appendChild(line);
     });
     return;
   }
   $('crumb').textContent = 'Progression'; $('title').textContent = 'Progression';
-  const grid = el('div', 'grid');
-  db.exos.filter((e) => !e.estFamille).forEach((n) => grid.appendChild(bigBtn(n.nom, typeLabel(n.type), 'exo', () => { view = { level: 'progress', exoId: n.id }; render(); })));
-  screen.appendChild(grid);
+  // Même classement que les Réglages : sections par catégorie, et l'encre dit où sont les données.
+  CATEGORIES.forEach((cat) => {
+    const exos = db.exos.filter((e) => !e.estFamille && e.categorieId === cat);
+    if (!exos.length) return;
+    const h = el('h2', 'reg-section'); h.textContent = cat; screen.appendChild(h);
+    const grid = el('div', 'grid');
+    exos.forEach((n) => {
+      const nbSeances = new Set(db.series.filter((s) => s.exoId === n.id).map((s) => dayKey(s.date))).size;
+      const tag = nbSeances ? `${nbSeances} séance${nbSeances > 1 ? 's' : ''}` : 'aucune donnée';
+      grid.appendChild(bigBtn(n.nom, tag, 'exo' + (nbSeances ? '' : ' vide'), () => { view = { level: 'progress', exoId: n.id }; render(); }));
+    });
+    screen.appendChild(grid);
+  });
 }
 
 if ('serviceWorker' in navigator) {
@@ -398,4 +459,7 @@ if ('serviceWorker' in navigator) {
 }
 
 render();
+// Un repos interrompu par un rechargement de la PWA reprend là où il en était.
+const reposEnCours = loadTimer(store);
+if (reposEnCours) startTimer(reposEnCours.cible, reposEnCours.start);
 export { }; // module
