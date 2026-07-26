@@ -17,8 +17,11 @@ export function loadDB(store, defaultExos = []) {
   }
 }
 
+// Retourne false si l'écriture échoue (quota iOS saturé, stockage indisponible) :
+// une série « validée » ne doit jamais se perdre en silence.
 export function saveDB(store, db) {
-  store.setItem(STORAGE_KEY, JSON.stringify(db));
+  try { store.setItem(STORAGE_KEY, JSON.stringify(db)); return true; }
+  catch { return false; }
 }
 
 const defaultId = () => (globalThis.crypto?.randomUUID ? crypto.randomUUID() : 'id' + Math.random().toString(36).slice(2));

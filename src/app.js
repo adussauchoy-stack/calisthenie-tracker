@@ -6,11 +6,33 @@ import { SEED_EXOS } from './seed.js';
 
 const store = window.localStorage;
 let db = loadDB(store, SEED_EXOS);
-if (db.exos.length === 0) { db.exos = [...SEED_EXOS]; saveDB(store, db); }
+if (db.exos.length === 0) { db.exos = [...SEED_EXOS]; sauver(); }
 
 let view = { level: 'cat' };
 let messageImport = null;
 let reglageOuvert = null; // fiche dépliée dans les Réglages (accordéon : une seule à la fois)
+let echecSauvegarde = false;
+let instantane = null, undoT = null; // annulation une-fois après suppression
+
+function sauver() {
+  const ok = saveDB(store, db);
+  echecSauvegarde = !ok;
+  if (!ok) {
+    const ban = $('banner'); ban.hidden = false;
+    ban.textContent = 'Enregistrement impossible (stockage plein ?) — exporte ta sauvegarde.';
+  }
+  return ok;
+}
+
+// La suppression reste à deux taps, mais laisse 8 secondes pour revenir en arrière.
+function proposerAnnulation(message) {
+  $('undomsg').textContent = message;
+  $('undobar').hidden = false;
+  $('sr-annonce').textContent = `${message} — Annuler disponible`;
+  clearTimeout(undoT);
+  undoT = setTimeout(masquerAnnulation, 8000);
+}
+function masquerAnnulation() { $('undobar').hidden = true; instantane = null; }
 
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls) => { const e = document.createElement(tag); if (cls) e.className = cls; return e; };
@@ -57,6 +79,10 @@ function render() {
   back.style.display = view.level === 'cat' ? 'none' : 'flex';
   $('banner').hidden = !besoinRappelExport(db);
   $('banner').textContent = 'Pense à exporter ta sauvegarde (Réglages).';
+  if (echecSauvegarde) {
+    $('banner').hidden = false;
+    $('banner').textContent = 'Enregistrement impossible (stockage plein ?) — exporte ta sauvegarde.';
+  }
 
   if (view.level === 'cat') {
     // La fiche du jour est datée, comme toute fiche de préparation.
@@ -169,7 +195,7 @@ function onAddSet(n) {
   // Le lest accepte les demi-kilos et refuse le négatif : la source de vérité ne se tronque pas.
   const lest = (() => { const e = $('f_lest'); return e ? Math.max(0, parseFloat(e.value) || 0) : 0; })();
   const serie = addSerie(db, { exoId: n.id, reps: g('reps'), lest, temps: g('temps') });
-  saveDB(store, db);
+  sauver();
   renderSets(n, serie.id);
   majLast(n);
   startTimer(n.tempsReposCible);
@@ -192,8 +218,10 @@ function renderSets(n, neuveId = null) {
       line.appendChild(pr);
     }
     line.appendChild(delButton(() => {
-      removeSerie(db, s.id); saveDB(store, db);
-      renderSets(n);
+      instantane = JSON.stringify(db);
+      removeSerie(db, s.id); sauver();
+      renderSets(n); majLast(n);
+      proposerAnnulation('Série supprimée');
     }, '✕', undefined, `Supprimer la série ${sets.length - i} (${formatSerie(s, n.type)})`));
     box.appendChild(line);
   });
@@ -233,6 +261,12 @@ function stopTimer() {
 
 $('back').onclick = goBack;
 $('timerstop').onclick = stopTimer;
+$('undobtn').onclick = () => {
+  if (!instantane) return;
+  db = JSON.parse(instantane);
+  sauver(); masquerAnnulation(); render();
+  $('sr-annonce').textContent = 'Suppression annulée';
+};
 $('nav-progress').onclick = () => { view = { level: 'progress' }; render(); };
 $('nav-settings').onclick = () => { view = { level: 'settings' }; render(); };
 
@@ -244,11 +278,13 @@ function renderSettings() {
   const io = el('div', 'row');
   const exportBtn = el('button', 'action primary'); exportBtn.textContent = '⬇︎ Exporter';
   exportBtn.onclick = () => {
-    const text = exportJSON(db); saveDB(store, db);
+    const text = exportJSON(db); sauver();
     const blob = new Blob([text], { type: 'application/json' });
     const a = el('a'); a.href = URL.createObjectURL(blob);
     a.download = `calisthenie-sauvegarde-${new Date().toISOString().slice(0, 10)}.json`;
-    a.click(); URL.revokeObjectURL(a.href); render();
+    a.click(); URL.revokeObjectURL(a.href);
+    messageImport = `Sauvegarde exportée — ${db.series.length} série${db.series.length > 1 ? 's' : ''}. Range le fichier dans Fichiers/iCloud.`;
+    render();
   };
   const importLabel = el('label', 'action ghost'); importLabel.textContent = '⬆︎ Importer';
   importLabel.style.textAlign = 'center';
@@ -269,7 +305,7 @@ function renderSettings() {
     const choix = el('div', 'row');
     const ok = el('button', 'action primary'); ok.textContent = 'Remplacer';
     ok.onclick = () => {
-      db = incoming; saveDB(store, db);
+      db = incoming; sauver();
       messageImport = `Sauvegarde importée ✓ — ${pluriel(db.series.length, 'série')}, ${pluriel(db.exos.length, 'exo')}.`;
       render();
     };
@@ -296,7 +332,7 @@ function renderSettings() {
 
   // Ajout : exercice ou famille — le nouvel élément est amené à l'écran, prêt à renommer
   function ajouter(exo) {
-    const cree = addExo(db, exo); reglageOuvert = cree.id; saveDB(store, db); render();
+    const cree = addExo(db, exo); reglageOuvert = cree.id; sauver(); render();
     const row = document.querySelector(`.exo-row[data-id="${cree.id}"]`);
     if (row) {
       row.scrollIntoView({ block: 'center' });
@@ -336,33 +372,41 @@ function renderSettings() {
 
     const edit = el('div', 'exo-edit');
     const nameIn = el('input'); nameIn.className = 'nom'; nameIn.value = n.nom; nameIn.style.cssText = 'background:var(--card2);border:1px solid var(--line);color:var(--text);border-radius:4px;padding:8px;';
-    nameIn.onchange = () => { updateExo(db, n.id, { nom: nameIn.value }); saveDB(store, db); titleEl.textContent = nameIn.value; };
+    nameIn.onchange = () => { updateExo(db, n.id, { nom: nameIn.value }); sauver(); titleEl.textContent = nameIn.value; };
     edit.appendChild(labelWrap('Nom', nameIn, `reg_${n.id}_nom`));
 
     const catSel = selectFrom(CATEGORIES, n.categorieId);
-    catSel.onchange = () => { changeCategorie(db, n.id, catSel.value); saveDB(store, db); render(); };
+    catSel.onchange = () => { changeCategorie(db, n.id, catSel.value); sauver(); render(); };
     edit.appendChild(labelWrap('Catégorie', catSel, `reg_${n.id}_cat`));
 
     if (!n.estFamille) {
       const familles = db.exos.filter((e) => e.estFamille && e.categorieId === n.categorieId);
       const parentSel = selectFromPairs([{ value: '', label: '— (niveau 1)' }, ...familles.map((f) => ({ value: f.id, label: f.nom }))], n.parentId || '');
       parentSel.className = 'parent';
-      parentSel.onchange = () => { updateExo(db, n.id, { parentId: parentSel.value || null }); saveDB(store, db); render(); };
+      parentSel.onchange = () => { updateExo(db, n.id, { parentId: parentSel.value || null }); sauver(); render(); };
       edit.appendChild(labelWrap('Famille parente', parentSel, `reg_${n.id}_parent`));
 
       const typeSel = selectFromPairs(
         [TYPES.REPS, TYPES.REPS_LEST, TYPES.TEMPS].map((t) => ({ value: t, label: typeLabel(t) })), n.type
       );
-      typeSel.onchange = () => { updateExo(db, n.id, { type: typeSel.value }); saveDB(store, db); render(); };
+      typeSel.onchange = () => { updateExo(db, n.id, { type: typeSel.value }); sauver(); render(); };
       edit.appendChild(labelWrap('Type', typeSel, `reg_${n.id}_type`));
       const repos = el('input'); repos.className = 'repos'; repos.type = 'number'; repos.value = n.tempsReposCible; repos.style.cssText = nameIn.style.cssText;
-      repos.onchange = () => { updateExo(db, n.id, { tempsReposCible: parseInt(repos.value, 10) || 0 }); saveDB(store, db); };
+      // Un repos cible de 0 rendrait la règle instantanément « atteinte » : plancher à 5 s.
+      repos.onchange = () => {
+        updateExo(db, n.id, { tempsReposCible: Math.max(5, parseInt(repos.value, 10) || 0) });
+        sauver(); repos.value = exoById(n.id).tempsReposCible;
+      };
       edit.appendChild(labelWrap('Repos cible (s)', repos, `reg_${n.id}_repos`));
     }
     // Supprimer une famille emporte ses déclinaisons ET tout leur historique :
     // le libellé de confirmation chiffre ce qui va disparaître (calculé au moment de l'armement).
     edit.appendChild(delButton(
-      () => { removeExo(db, n.id); saveDB(store, db); render(); },
+      () => {
+        instantane = JSON.stringify(db);
+        removeExo(db, n.id); sauver(); render();
+        proposerAnnulation(`« ${n.nom} » supprimé`);
+      },
       'Supprimer',
       () => {
         const ids = new Set([n.id, ...db.exos.filter((e) => e.parentId === n.id).map((e) => e.id)]);
@@ -447,8 +491,11 @@ function renderProgress() {
       const quand = `${String(dt.getDate()).padStart(2, '0')}/${String(dt.getMonth() + 1).padStart(2, '0')}`;
       const line = el('div', 'set-line serie-line');
       line.innerHTML = `<span class="n">${quand}</span><span>${formatSerie(s, n.type)}</span>`;
-      line.appendChild(delButton(() => { removeSerie(db, s.id); saveDB(store, db); render(); }, '✕', undefined,
-        `Supprimer la série du ${quand} (${formatSerie(s, n.type)})`));
+      line.appendChild(delButton(() => {
+        instantane = JSON.stringify(db);
+        removeSerie(db, s.id); sauver(); render();
+        proposerAnnulation('Série supprimée');
+      }, '✕', undefined, `Supprimer la série du ${quand} (${formatSerie(s, n.type)})`));
       screen.appendChild(line);
     });
     return;
