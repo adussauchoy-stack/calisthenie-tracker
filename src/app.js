@@ -12,9 +12,12 @@ let view = { level: 'cat' };
 let messageImport = null;
 let reglageOuvert = null; // fiche dépliée dans les Réglages (accordéon : une seule à la fois)
 let echecSauvegarde = false;
-let instantane = null, undoT = null; // annulation une-fois après suppression
+let instantane = null; // annulation une-fois après suppression
 
+// Toute écriture invalide l'annulation en attente : on ne restaure jamais par-dessus
+// des modifications postérieures. Le snapshot d'une suppression est posé APRÈS son sauver().
 function sauver() {
+  masquerAnnulation();
   const ok = saveDB(store, db);
   echecSauvegarde = !ok;
   if (!ok) {
@@ -24,13 +27,14 @@ function sauver() {
   return ok;
 }
 
-// La suppression reste à deux taps, mais laisse 8 secondes pour revenir en arrière.
-function proposerAnnulation(message) {
+// Dans un carnet, on gomme quand on veut : l'annulation reste offerte jusqu'à la
+// prochaine écriture (nouvelle série, édition, import…), pas jusqu'à un chrono.
+function proposerAnnulation(message, snapshot) {
+  instantane = snapshot;
   $('undomsg').textContent = message;
   $('undobar').hidden = false;
   $('sr-annonce').textContent = `${message} — Annuler disponible`;
-  clearTimeout(undoT);
-  undoT = setTimeout(masquerAnnulation, 8000);
+  $('undobtn').focus();
 }
 function masquerAnnulation() { $('undobar').hidden = true; instantane = null; }
 
@@ -56,6 +60,7 @@ function delButton(onConfirm, label = 'Supprimer', armedLabel, ariaLabel) {
       t = setTimeout(() => {
         armed = false; b.textContent = label; b.classList.remove('arme');
         if (ariaLabel) b.setAttribute('aria-label', ariaLabel);
+        $('sr-annonce').textContent = 'Confirmation expirée — rien n\'a été supprimé';
       }, 4000);
     } else { clearTimeout(t); onConfirm(); }
   };
@@ -168,13 +173,17 @@ function renderEntry() {
   screen.appendChild(fields);
   // Les actions vivent dans le dock, en zone du pouce — le geste répété 20 fois par séance
   // ne doit pas habiter le tiers haut de l'écran.
+  const refaire = el('button', 'action ghost'); refaire.id = 'refaire'; refaire.hidden = true;
+  refaire.onclick = () => onRefaire(n);
+  const rowRefaire = el('div', 'row'); rowRefaire.appendChild(refaire);
   const row = el('div', 'row');
   const add = el('button', 'action primary'); add.textContent = '+ Série'; add.onclick = () => onAddSet(n);
   // « Terminé » quitte la saisie sans tuer le chrono : le repos couvre aussi le passage à l'exo suivant.
   // Le chrono ne s'arrête que par son bouton ✕ ou au lancement de la série suivante.
   const done = el('button', 'action ghost'); done.textContent = 'Terminé'; done.onclick = () => goBack();
   row.appendChild(add); row.appendChild(done);
-  const bar = $('actionbar'); bar.appendChild(row); bar.hidden = false;
+  const bar = $('actionbar'); bar.appendChild(rowRefaire); bar.appendChild(row); bar.hidden = false;
+  majRefaire(n);
   const sets = el('div', 'sets'); sets.id = 'sets'; screen.appendChild(sets);
   // « + Série » reste désactivé tant que la valeur principale est vide ou nulle :
   // un tap à vide créerait une série à 0 qui polluerait l'export nourrissant le coaching.
@@ -189,18 +198,38 @@ function valeurPrincipale(n) {
   return e ? parseInt(e.value, 10) : NaN;
 }
 
+function logSerie(n, valeurs) {
+  const serie = addSerie(db, { exoId: n.id, ...valeurs });
+  sauver();
+  renderSets(n, serie.id);
+  majLast(n);
+  majRefaire(n);
+  startTimer(n.tempsReposCible);
+  if (navigator.vibrate) navigator.vibrate(20);
+  $('banner').hidden = !besoinRappelExport(db);
+}
+
 function onAddSet(n) {
   if (!(valeurPrincipale(n) > 0)) return;
   const g = (id) => { const e = $('f_' + id); return e ? (parseInt(e.value, 10) || 0) : 0; };
   // Le lest accepte les demi-kilos et refuse le négatif : la source de vérité ne se tronque pas.
   const lest = (() => { const e = $('f_lest'); return e ? Math.max(0, parseFloat(e.value) || 0) : 0; })();
-  const serie = addSerie(db, { exoId: n.id, reps: g('reps'), lest, temps: g('temps') });
-  sauver();
-  renderSets(n, serie.id);
-  majLast(n);
-  startTimer(n.tempsReposCible);
-  if (navigator.vibrate) navigator.vibrate(20);
-  $('banner').hidden = !besoinRappelExport(db);
+  logSerie(n, { reps: g('reps'), lest, temps: g('temps') });
+}
+
+// Le carnet montre la dernière ligne écrite : la refaire est un seul tap.
+function onRefaire(n) {
+  const d = lastSerie(db.series, n.id);
+  if (!d) return;
+  logSerie(n, { reps: d.reps, lest: d.lest, temps: d.temps });
+}
+
+function majRefaire(n) {
+  const rf = $('refaire'); if (!rf) return;
+  const d = lastSerie(db.series, n.id);
+  rf.hidden = !d;
+  const rangee = rf.closest('.row'); if (rangee) rangee.hidden = !d;
+  if (d) rf.textContent = `Refaire — ${formatSerie(d, n.type)}`;
 }
 
 function renderSets(n, neuveId = null) {
@@ -218,13 +247,48 @@ function renderSets(n, neuveId = null) {
       line.appendChild(pr);
     }
     line.appendChild(delButton(() => {
-      instantane = JSON.stringify(db);
+      const snap = JSON.stringify(db);
       removeSerie(db, s.id); sauver();
       renderSets(n); majLast(n);
-      proposerAnnulation('Série supprimée');
+      proposerAnnulation('Série supprimée', snap);
     }, '✕', undefined, `Supprimer la série ${sets.length - i} (${formatSerie(s, n.type)})`));
     box.appendChild(line);
   });
+}
+
+// L'écran reste allumé pendant le repos (sinon, téléphone au sol, le passage au vert
+// se joue dans le vide : iOS n'a ni vibration web ni exécution écran verrouillé).
+let wakeLock = null;
+async function garderEcran() {
+  try { if (navigator.wakeLock && !wakeLock) wakeLock = await navigator.wakeLock.request('screen'); } catch {}
+}
+function lacherEcran() {
+  try { if (wakeLock) { wakeLock.release(); wakeLock = null; } } catch { wakeLock = null; }
+}
+document.addEventListener('visibilitychange', () => {
+  wakeLock = null; // iOS relâche le verrou quand la page se cache
+  if (!document.hidden && !$('timer').hidden) garderEcran();
+});
+
+// Le tick de fin de repos — deux frappes de machine à écrire, optionnelles (Réglages).
+let audioCtx = null;
+function preparerSon() {
+  if (!db.meta.sonRepos || audioCtx) return;
+  try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch {}
+}
+function jouerTick() {
+  if (!db.meta.sonRepos || !audioCtx) return;
+  try {
+    const frappe = (quand, freq) => {
+      const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+      o.type = 'square'; o.frequency.value = freq;
+      g.gain.setValueAtTime(0.08, quand); g.gain.exponentialRampToValueAtTime(0.001, quand + 0.06);
+      o.connect(g); g.connect(audioCtx.destination);
+      o.start(quand); o.stop(quand + 0.07);
+    };
+    const t0 = audioCtx.currentTime;
+    frappe(t0, 880); frappe(t0 + 0.12, 660);
+  } catch {}
 }
 
 let timerInt = null;
@@ -232,6 +296,7 @@ function startTimer(cible, startMs = Date.now()) {
   const box = $('timer'), val = $('timerval'), lbl = $('timerlabel');
   box.hidden = false; clearInterval(timerInt); let buzzed = false;
   saveTimer(store, { start: startMs, cible }); // le repos survit à un rechargement de la PWA
+  garderEcran(); preparerSon();
   const fmt = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
   // Compte à rebours : la seule question mi-séance est « combien il me reste ? ».
   // Une fois la cible atteinte, le dépassement s'affiche en « +m:ss ».
@@ -248,6 +313,7 @@ function startTimer(cible, startMs = Date.now()) {
       if (!buzzed) {
         buzzed = true;
         if (navigator.vibrate) navigator.vibrate([60, 40, 60]);
+        jouerTick();
         $('sr-annonce').textContent = 'Repos atteint';
       }
     }
@@ -256,7 +322,7 @@ function startTimer(cible, startMs = Date.now()) {
 }
 function stopTimer() {
   clearInterval(timerInt); $('timer').hidden = true;
-  clearTimer(store); $('sr-annonce').textContent = '';
+  clearTimer(store); lacherEcran(); $('sr-annonce').textContent = '';
 }
 
 $('back').onclick = goBack;
@@ -264,7 +330,13 @@ $('timerstop').onclick = stopTimer;
 $('undobtn').onclick = () => {
   if (!instantane) return;
   db = JSON.parse(instantane);
-  sauver(); masquerAnnulation(); render();
+  sauver();
+  // En saisie, on restaure la liste sans re-render global : les valeurs tapées
+  // dans les champs restent intactes (sinon la série suivante partirait faussée).
+  if (view.level === 'entry') {
+    const n = exoById(view.exoId);
+    if (n) { renderSets(n); majLast(n); } else render();
+  } else render();
   $('sr-annonce').textContent = 'Suppression annulée';
 };
 $('nav-progress').onclick = () => { view = { level: 'progress' }; render(); };
@@ -330,6 +402,18 @@ function renderSettings() {
   screen.appendChild(ioStatus);
   if (messageImport) { ioStatus.hidden = false; ioStatus.textContent = messageImport; messageImport = null; }
 
+  // Le tick de fin de repos — coupé par défaut ; l'activer joue un aperçu (geste utilisateur = audio permis).
+  const sonBtn = el('button', 'action ghost');
+  const majSon = () => { sonBtn.textContent = `Son de fin de repos — ${db.meta.sonRepos ? 'activé' : 'coupé'}`; };
+  majSon();
+  sonBtn.onclick = () => {
+    db.meta.sonRepos = !db.meta.sonRepos; sauver();
+    if (db.meta.sonRepos) { preparerSon(); jouerTick(); }
+    majSon();
+  };
+  const sonRow = el('div', 'row'); sonRow.style.margin = '12px 0 0'; sonRow.appendChild(sonBtn);
+  screen.appendChild(sonRow);
+
   // Ajout : exercice ou famille — le nouvel élément est amené à l'écran, prêt à renommer
   function ajouter(exo) {
     const cree = addExo(db, exo); reglageOuvert = cree.id; sauver(); render();
@@ -365,7 +449,12 @@ function renderSettings() {
     const titleEl = el('span', 'exo-title'); titleEl.textContent = n.nom; tog.appendChild(titleEl);
     const m = el('span', 'exo-resume'); m.textContent = resume(n); tog.appendChild(m);
     const chev = el('span', 'chev'); chev.textContent = '›'; chev.setAttribute('aria-hidden', 'true'); tog.appendChild(chev);
-    tog.onclick = () => { reglageOuvert = ouverte ? null : n.id; render(); };
+    tog.onclick = () => {
+      reglageOuvert = ouverte ? null : n.id; render();
+      // Le re-render tue le focus : on le repose sur la même fiche (clavier / VoiceOver).
+      const t = document.querySelector(`.exo-row[data-id="${n.id}"] .exo-toggle`);
+      if (t) t.focus();
+    };
     rowEl.appendChild(tog);
 
     if (!ouverte) return rowEl;
@@ -375,21 +464,22 @@ function renderSettings() {
     nameIn.onchange = () => { updateExo(db, n.id, { nom: nameIn.value }); sauver(); titleEl.textContent = nameIn.value; };
     edit.appendChild(labelWrap('Nom', nameIn, `reg_${n.id}_nom`));
 
+    const refocus = (id) => { const c = document.getElementById(id); if (c) c.focus(); };
     const catSel = selectFrom(CATEGORIES, n.categorieId);
-    catSel.onchange = () => { changeCategorie(db, n.id, catSel.value); sauver(); render(); };
+    catSel.onchange = () => { changeCategorie(db, n.id, catSel.value); sauver(); render(); refocus(`reg_${n.id}_cat`); };
     edit.appendChild(labelWrap('Catégorie', catSel, `reg_${n.id}_cat`));
 
     if (!n.estFamille) {
       const familles = db.exos.filter((e) => e.estFamille && e.categorieId === n.categorieId);
       const parentSel = selectFromPairs([{ value: '', label: '— (niveau 1)' }, ...familles.map((f) => ({ value: f.id, label: f.nom }))], n.parentId || '');
       parentSel.className = 'parent';
-      parentSel.onchange = () => { updateExo(db, n.id, { parentId: parentSel.value || null }); sauver(); render(); };
+      parentSel.onchange = () => { updateExo(db, n.id, { parentId: parentSel.value || null }); sauver(); render(); refocus(`reg_${n.id}_parent`); };
       edit.appendChild(labelWrap('Famille parente', parentSel, `reg_${n.id}_parent`));
 
       const typeSel = selectFromPairs(
         [TYPES.REPS, TYPES.REPS_LEST, TYPES.TEMPS].map((t) => ({ value: t, label: typeLabel(t) })), n.type
       );
-      typeSel.onchange = () => { updateExo(db, n.id, { type: typeSel.value }); sauver(); render(); };
+      typeSel.onchange = () => { updateExo(db, n.id, { type: typeSel.value }); sauver(); render(); refocus(`reg_${n.id}_type`); };
       edit.appendChild(labelWrap('Type', typeSel, `reg_${n.id}_type`));
       const repos = el('input'); repos.className = 'repos'; repos.type = 'number'; repos.value = n.tempsReposCible; repos.style.cssText = nameIn.style.cssText;
       // Un repos cible de 0 rendrait la règle instantanément « atteinte » : plancher à 5 s.
@@ -403,9 +493,9 @@ function renderSettings() {
     // le libellé de confirmation chiffre ce qui va disparaître (calculé au moment de l'armement).
     edit.appendChild(delButton(
       () => {
-        instantane = JSON.stringify(db);
+        const snap = JSON.stringify(db);
         removeExo(db, n.id); sauver(); render();
-        proposerAnnulation(`« ${n.nom} » supprimé`);
+        proposerAnnulation(`« ${n.nom} » supprimé`, snap);
       },
       'Supprimer',
       () => {
@@ -482,8 +572,26 @@ function renderProgress() {
       const t = (v, y) => `<text x="6" y="${y}" fill="var(--muted)" font-family="Courier Prime,ui-monospace,Menlo,monospace" font-size="16">${v}${unite}</text>`;
       return t(maxV, 20) + (maxV !== minV ? t(minV, H - 6) : '');
     })() : '';
-    svg.innerHTML = marges + (d ? `<path d="${d}"></path>` : '') + dots.map((p) => `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="3.5"></circle>`).join('');
+    // Second trait : le lest max par jour, en pointillé estompé — la progression en charge
+    // n'est plus invisible quand les reps stagnent.
+    let traceLest = '';
+    if (n.type === TYPES.REPS_LEST) {
+      const ptsL = chartPoints(series, n.type, 'lest').filter((p) => p.value > 0);
+      if (ptsL.length) {
+        const { d: dL, dots: dotsL } = svgPath(ptsL, W, H);
+        const maxL = Math.max(...ptsL.map((p) => p.value));
+        traceLest = (dL ? `<path class="lest" d="${dL}"></path>` : '')
+          + dotsL.map((p) => `<circle class="lest" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="2.5"></circle>`).join('')
+          + `<text x="${W - 6}" y="20" text-anchor="end" fill="var(--muted)" font-family="Courier Prime,ui-monospace,Menlo,monospace" font-size="16">${maxL}kg</text>`;
+      }
+    }
+    svg.innerHTML = marges + traceLest + (d ? `<path d="${d}"></path>` : '') + dots.map((p) => `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="3.5"></circle>`).join('');
     screen.appendChild(svg);
+    if (traceLest) {
+      const legende = el('div', 'imprime'); legende.style.margin = '6px 2px 0';
+      legende.textContent = 'trait plein reps · pointillé lest';
+      screen.appendChild(legende);
+    }
     if (pts.length === 0) { const p = el('div', 'last'); p.textContent = 'Aucune donnée encore.'; screen.appendChild(p); }
     // Dernières séries, avec suppression (corrige une saisie ratée après coup)
     [...series].sort((a, b) => b.date - a.date).slice(0, 10).forEach((s) => {
@@ -492,9 +600,9 @@ function renderProgress() {
       const line = el('div', 'set-line serie-line');
       line.innerHTML = `<span class="n">${quand}</span><span>${formatSerie(s, n.type)}</span>`;
       line.appendChild(delButton(() => {
-        instantane = JSON.stringify(db);
+        const snap = JSON.stringify(db);
         removeSerie(db, s.id); sauver(); render();
-        proposerAnnulation('Série supprimée');
+        proposerAnnulation('Série supprimée', snap);
       }, '✕', undefined, `Supprimer la série du ${quand} (${formatSerie(s, n.type)})`));
       screen.appendChild(line);
     });

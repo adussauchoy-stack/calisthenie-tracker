@@ -27,13 +27,19 @@ export function computeRecords(series, type) {
 }
 
 // Vrai si la série bat une meilleure marque antérieure de l'exo (une marque doit exister :
-// la toute première série d'un exo n'est pas un record). Pour reps+lest, battre l'un OU l'autre suffit,
-// en miroir des deux records affichés.
+// la toute première série d'un exo n'est pas un record).
+// Pour reps+lest : un record de lest se bat en soulevant plus lourd ; un record de reps
+// ne se compare qu'aux séries faites à charge égale ou moindre — 10 reps à vide ne battent
+// pas 9 reps à +2,5 kg, et une première série dans une classe de charge n'est pas un record.
 export function estRecord(seriesAvant, serie, type) {
   if (seriesAvant.length === 0) return false;
   const rec = computeRecords(seriesAvant, type);
   if (type === TYPES.TEMPS) return serie.temps > (rec.temps || 0);
-  if (type === TYPES.REPS_LEST) return serie.reps > (rec.reps || 0) || serie.lest > (rec.lest || 0);
+  if (type === TYPES.REPS_LEST) {
+    if (serie.lest > (rec.lest || 0)) return true;
+    const comparables = seriesAvant.filter((s) => s.lest <= serie.lest);
+    return comparables.length > 0 && serie.reps > Math.max(...comparables.map((s) => s.reps));
+  }
   return serie.reps > (rec.reps || 0);
 }
 
@@ -51,8 +57,9 @@ export function seriesDuJour(series, exoId, nowMs) {
     .sort((a, b) => b.date - a.date);
 }
 
-export function chartPoints(series, type) {
-  const metric = (x) => (type === TYPES.TEMPS ? x.temps : x.reps);
+// quoi = 'lest' pour tracer le lest max par jour (second trait du papier millimétré).
+export function chartPoints(series, type, quoi) {
+  const metric = quoi === 'lest' ? (x) => x.lest : (x) => (type === TYPES.TEMPS ? x.temps : x.reps);
   const byDay = new Map();
   for (const x of series) {
     const k = dayKey(x.date);
