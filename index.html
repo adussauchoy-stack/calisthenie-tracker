@@ -25,10 +25,13 @@
     <div id="screen"></div>
   </div>
   <div id="sr-annonce" class="sr-only" role="status" aria-live="polite"></div>
-  <div id="timer" class="wait" hidden>
-    <span id="timerval">0:00</span>
-    <small id="timerlabel">Repos…</small>
-    <button class="stop" id="timerstop" aria-label="Arrêter le repos">✕</button>
+  <div id="dock">
+    <div id="actionbar" hidden></div>
+    <div id="timer" class="wait" hidden>
+      <span id="timerval">0:00</span>
+      <small id="timerlabel">Repos…</small>
+      <button class="stop" id="timerstop" aria-label="Arrêter le repos">✕</button>
+    </div>
   </div>
   <script type="module" src="src/app.js"></script>
 </body>

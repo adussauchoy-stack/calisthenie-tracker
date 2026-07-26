@@ -28,10 +28,11 @@ function delButton(onConfirm, label = 'Supprimer', armedLabel, ariaLabel) {
     if (!armed) {
       armed = true;
       const arme = (typeof armedLabel === 'function' ? armedLabel() : armedLabel) || 'Confirmer ?';
-      b.textContent = arme;
+      b.textContent = arme; b.classList.add('arme');
       if (ariaLabel) b.setAttribute('aria-label', arme);
+      $('sr-annonce').textContent = arme;
       t = setTimeout(() => {
-        armed = false; b.textContent = label;
+        armed = false; b.textContent = label; b.classList.remove('arme');
         if (ariaLabel) b.setAttribute('aria-label', ariaLabel);
       }, 4000);
     } else { clearTimeout(t); onConfirm(); }
@@ -51,6 +52,8 @@ function bigBtn(txt, tag, cls, onclick) {
 function render() {
   const screen = $('screen'), back = $('back'), crumb = $('crumb'), title = $('title');
   screen.innerHTML = '';
+  // La barre d'actions du dock n'existe que pendant la saisie (renderEntry la remplit).
+  const bar = $('actionbar'); bar.hidden = true; bar.innerHTML = '';
   back.style.display = view.level === 'cat' ? 'none' : 'flex';
   $('banner').hidden = !besoinRappelExport(db);
   $('banner').textContent = 'Pense à exporter ta sauvegarde (Réglages).';
@@ -112,9 +115,11 @@ function goBack() {
 
 function openEntry(exoId) { view = { level: 'entry', exoId }; render(); }
 
-function numField(id, label, ph) {
+function numField(id, label, ph, decimal = false) {
   const f = el('div', 'field');
-  f.innerHTML = `<label for="f_${id}">${label}</label><input id="f_${id}" type="number" inputmode="numeric" placeholder="${ph}">`;
+  // decimal : le lest accepte les demi-kilos — clavier iOS avec virgule, pas de spinner entier.
+  const attrs = decimal ? 'inputmode="decimal" step="0.5"' : 'inputmode="numeric"';
+  f.innerHTML = `<label for="f_${id}">${label}</label><input id="f_${id}" type="number" ${attrs} placeholder="${ph}">`;
   return f;
 }
 
@@ -133,14 +138,17 @@ function renderEntry() {
   const last = el('div', 'last'); screen.appendChild(last); majLast(n);
   const fields = el('div', 'fields');
   if (n.type === TYPES.TEMPS) fields.appendChild(numField('temps', 'Temps (s)', '20'));
-  else { fields.appendChild(numField('reps', 'Répétitions', '8')); if (n.type === TYPES.REPS_LEST) fields.appendChild(numField('lest', 'Lest (kg)', '0')); }
+  else { fields.appendChild(numField('reps', 'Répétitions', '8')); if (n.type === TYPES.REPS_LEST) fields.appendChild(numField('lest', 'Lest (kg)', '0', true)); }
   screen.appendChild(fields);
+  // Les actions vivent dans le dock, en zone du pouce — le geste répété 20 fois par séance
+  // ne doit pas habiter le tiers haut de l'écran.
   const row = el('div', 'row');
   const add = el('button', 'action primary'); add.textContent = '+ Série'; add.onclick = () => onAddSet(n);
   // « Terminé » quitte la saisie sans tuer le chrono : le repos couvre aussi le passage à l'exo suivant.
   // Le chrono ne s'arrête que par son bouton ✕ ou au lancement de la série suivante.
   const done = el('button', 'action ghost'); done.textContent = 'Terminé'; done.onclick = () => goBack();
-  row.appendChild(add); row.appendChild(done); screen.appendChild(row);
+  row.appendChild(add); row.appendChild(done);
+  const bar = $('actionbar'); bar.appendChild(row); bar.hidden = false;
   const sets = el('div', 'sets'); sets.id = 'sets'; screen.appendChild(sets);
   // « + Série » reste désactivé tant que la valeur principale est vide ou nulle :
   // un tap à vide créerait une série à 0 qui polluerait l'export nourrissant le coaching.
@@ -158,7 +166,9 @@ function valeurPrincipale(n) {
 function onAddSet(n) {
   if (!(valeurPrincipale(n) > 0)) return;
   const g = (id) => { const e = $('f_' + id); return e ? (parseInt(e.value, 10) || 0) : 0; };
-  const serie = addSerie(db, { exoId: n.id, reps: g('reps'), lest: g('lest'), temps: g('temps') });
+  // Le lest accepte les demi-kilos et refuse le négatif : la source de vérité ne se tronque pas.
+  const lest = (() => { const e = $('f_lest'); return e ? Math.max(0, parseFloat(e.value) || 0) : 0; })();
+  const serie = addSerie(db, { exoId: n.id, reps: g('reps'), lest, temps: g('temps') });
   saveDB(store, db);
   renderSets(n, serie.id);
   majLast(n);
@@ -327,27 +337,27 @@ function renderSettings() {
     const edit = el('div', 'exo-edit');
     const nameIn = el('input'); nameIn.className = 'nom'; nameIn.value = n.nom; nameIn.style.cssText = 'background:var(--card2);border:1px solid var(--line);color:var(--text);border-radius:4px;padding:8px;';
     nameIn.onchange = () => { updateExo(db, n.id, { nom: nameIn.value }); saveDB(store, db); titleEl.textContent = nameIn.value; };
-    edit.appendChild(labelWrap('Nom', nameIn));
+    edit.appendChild(labelWrap('Nom', nameIn, `reg_${n.id}_nom`));
 
     const catSel = selectFrom(CATEGORIES, n.categorieId);
     catSel.onchange = () => { changeCategorie(db, n.id, catSel.value); saveDB(store, db); render(); };
-    edit.appendChild(labelWrap('Catégorie', catSel));
+    edit.appendChild(labelWrap('Catégorie', catSel, `reg_${n.id}_cat`));
 
     if (!n.estFamille) {
       const familles = db.exos.filter((e) => e.estFamille && e.categorieId === n.categorieId);
       const parentSel = selectFromPairs([{ value: '', label: '— (niveau 1)' }, ...familles.map((f) => ({ value: f.id, label: f.nom }))], n.parentId || '');
       parentSel.className = 'parent';
       parentSel.onchange = () => { updateExo(db, n.id, { parentId: parentSel.value || null }); saveDB(store, db); render(); };
-      edit.appendChild(labelWrap('Famille parente', parentSel));
+      edit.appendChild(labelWrap('Famille parente', parentSel, `reg_${n.id}_parent`));
 
       const typeSel = selectFromPairs(
         [TYPES.REPS, TYPES.REPS_LEST, TYPES.TEMPS].map((t) => ({ value: t, label: typeLabel(t) })), n.type
       );
       typeSel.onchange = () => { updateExo(db, n.id, { type: typeSel.value }); saveDB(store, db); render(); };
-      edit.appendChild(labelWrap('Type', typeSel));
+      edit.appendChild(labelWrap('Type', typeSel, `reg_${n.id}_type`));
       const repos = el('input'); repos.className = 'repos'; repos.type = 'number'; repos.value = n.tempsReposCible; repos.style.cssText = nameIn.style.cssText;
       repos.onchange = () => { updateExo(db, n.id, { tempsReposCible: parseInt(repos.value, 10) || 0 }); saveDB(store, db); };
-      edit.appendChild(labelWrap('Repos cible (s)', repos));
+      edit.appendChild(labelWrap('Repos cible (s)', repos, `reg_${n.id}_repos`));
     }
     // Supprimer une famille emporte ses déclinaisons ET tout leur historique :
     // le libellé de confirmation chiffre ce qui va disparaître (calculé au moment de l'armement).
@@ -380,7 +390,11 @@ function renderSettings() {
     });
   });
 
-  function labelWrap(text, control) { const w = el('div', 'field'); const l = el('label'); l.textContent = text; w.appendChild(l); w.appendChild(control); return w; }
+  function labelWrap(text, control, id) {
+    const w = el('div', 'field'); const l = el('label'); l.textContent = text;
+    if (id) { control.id = id; l.htmlFor = id; }
+    w.appendChild(l); w.appendChild(control); return w;
+  }
   function selectFrom(options, current) {
     const s = el('select'); s.style.cssText = 'background:var(--card2);border:1px solid var(--line);color:var(--text);border-radius:4px;padding:8px;';
     options.forEach((o) => { const opt = el('option'); opt.value = o; opt.textContent = o; if (o === current) opt.selected = true; s.appendChild(opt); });
@@ -420,8 +434,9 @@ function renderProgress() {
     const marges = pts.length ? (() => {
       const vals = pts.map((p) => p.value);
       const maxV = Math.max(...vals), minV = Math.min(...vals);
-      const t = (v, y) => `<text x="6" y="${y}" fill="var(--muted)" font-family="Courier Prime,ui-monospace,Menlo,monospace" font-size="11">${v}${unite}</text>`;
-      return t(maxV, 14) + (maxV !== minV ? t(minV, H - 6) : '');
+      // viewBox 528 sur ~390px d'écran : 16 unités ≈ 12px réels, le minimum lisible à bout de bras.
+      const t = (v, y) => `<text x="6" y="${y}" fill="var(--muted)" font-family="Courier Prime,ui-monospace,Menlo,monospace" font-size="16">${v}${unite}</text>`;
+      return t(maxV, 20) + (maxV !== minV ? t(minV, H - 6) : '');
     })() : '';
     svg.innerHTML = marges + (d ? `<path d="${d}"></path>` : '') + dots.map((p) => `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="3.5"></circle>`).join('');
     screen.appendChild(svg);
